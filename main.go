@@ -989,8 +989,8 @@ func createAdminControls(hwnd HWND) {
 	createControl("BUTTON", "应用", WS_TABSTOP, 760, 306, 82, 30, hwnd, ID_SETTINGS_APPLY)
 	createControl("BUTTON", "默认", WS_TABSTOP, 858, 306, 82, 30, hwnd, ID_SETTINGS_RESET)
 
-	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 760, 382, 180, 32, hwnd, ID_SAVE_CLOSE)
-	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 424, 180, 32, hwnd, ID_EXIT_APP)
+	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 552, 536, 180, 32, hwnd, ID_SAVE_CLOSE)
+	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 536, 180, 32, hwnd, ID_EXIT_APP)
 	populateSettingsEdits()
 }
 
