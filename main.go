@@ -47,6 +47,14 @@ type MSG struct {
 	Pt      POINT
 }
 
+type MINMAXINFO struct {
+	PtReserved     POINT
+	PtMaxSize      POINT
+	PtMaxPosition  POINT
+	PtMinTrackSize POINT
+	PtMaxTrackSize POINT
+}
+
 type WNDCLASSEX struct {
 	CbSize        uint32
 	Style         uint32
@@ -156,6 +164,7 @@ const (
 	WM_DESTROY         = 0x0002
 	WM_MOVE            = 0x0003
 	WM_SIZE            = 0x0005
+	WM_GETMINMAXINFO   = 0x0024
 	WM_CLOSE           = 0x0010
 	WM_PAINT           = 0x000F
 	WM_ERASEBKGND      = 0x0014
@@ -171,9 +180,19 @@ const (
 	WM_CTLCOLOREDIT    = 0x0133
 	WM_CTLCOLORLISTBOX = 0x0134
 	WM_MOUSEACTIVATE   = 0x0021
+	WM_NCHITTEST       = 0x0084
 	WM_NCLBUTTONDOWN   = 0x00A1
 
+	HTCLIENT      = 1
 	HTCAPTION     = 2
+	HTLEFT        = 10
+	HTRIGHT       = 11
+	HTTOP         = 12
+	HTTOPLEFT     = 13
+	HTTOPRIGHT    = 14
+	HTBOTTOM      = 15
+	HTBOTTOMLEFT  = 16
+	HTBOTTOMRIGHT = 17
 	MA_NOACTIVATE = 3
 
 	SW_HIDE             = 0
@@ -327,6 +346,7 @@ var (
 	procTrackPopupMenu             = user32.NewProc("TrackPopupMenu")
 	procDestroyMenu                = user32.NewProc("DestroyMenu")
 	procClientToScreen             = user32.NewProc("ClientToScreen")
+	procScreenToClient             = user32.NewProc("ScreenToClient")
 	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
 	procSetProcessDPIAware         = user32.NewProc("SetProcessDPIAware")
 
@@ -366,8 +386,8 @@ var (
 	fontBold        HFONT
 	fontTitle       HFONT
 
-	overlayWidth      int32 = 1040
-	overlayHeight     int32 = 92
+	overlayWidth      int32 = 1280
+	overlayHeight     int32 = 122
 	scrollOffset      int32
 	downX             int32
 	downY             int32
@@ -411,7 +431,7 @@ func main() {
 		WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED,
 		"TeacherScoreOverlayWindow",
 		"课堂加减分",
-		WS_POPUP,
+		WS_POPUP|WS_THICKFRAME,
 		initialOverlayX(), 18, overlayWidth, overlayHeight,
 		0, 0,
 	)
@@ -477,6 +497,22 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 	switch msg {
 	case WM_MOUSEACTIVATE:
 		return MA_NOACTIVATE
+	case WM_NCHITTEST:
+		return overlayHitTest(hwnd, lParam)
+	case WM_GETMINMAXINFO:
+		info := (*MINMAXINFO)(unsafe.Pointer(lParam))
+		info.PtMinTrackSize = POINT{X: 920, Y: 104}
+		return 0
+	case WM_SIZE:
+		width := int32(loword(lParam))
+		height := int32(hiword(lParam))
+		if width > 0 && height > 0 {
+			overlayWidth = width
+			overlayHeight = height
+			clampScroll()
+			applyOverlayWindowStyle()
+		}
+		return 0
 	case WM_ERASEBKGND:
 		return 1
 	case WM_PAINT:
@@ -594,9 +630,10 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 	negativeColor := colorFromHex(settings.NegativeColor, rgb(244, 63, 94))
 	textColor := colorFromHex(settings.TextColor, rgb(15, 23, 42))
 
-	fillRound(hdc, rc.Left, rc.Top, rc.Right, rc.Bottom, 22, overlayColor, lighten(accentColor, 0.62))
-	fillRound(hdc, 8, 8, 148, 84, 18, lighten(accentColor, 0.83), lighten(accentColor, 0.58))
-	drawText(hdc, "课堂加减分", RECT{20, 12, 140, 34}, fontBold, textColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	fillRound(hdc, rc.Left, rc.Top, rc.Right, rc.Bottom, 24, overlayColor, lighten(accentColor, 0.62))
+	leftPanel := leftPanelRect()
+	fillRound(hdc, leftPanel.Left, leftPanel.Top, leftPanel.Right, leftPanel.Bottom, 18, lighten(accentColor, 0.83), lighten(accentColor, 0.58))
+	drawText(hdc, "课堂加减分", RECT{leftPanel.Left + 14, leftPanel.Top + 8, leftPanel.Right - 10, leftPanel.Top + 32}, fontTitle, textColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	activeClass := getActiveClass()
 	className := "未配置班级"
 	studentCount := 0
@@ -604,10 +641,10 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 		className = activeClass.Name
 		studentCount = len(activeClass.Students)
 	}
-	drawText(hdc, fmt.Sprintf("%s · %d人", className, studentCount), RECT{20, 34, 140, 52}, fontSmall, rgb(71, 85, 105), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, fmt.Sprintf("%s · %d人", className, studentCount), RECT{leftPanel.Left + 14, leftPanel.Top + 34, leftPanel.Right - 10, leftPanel.Top + 56}, fontNormal, rgb(71, 85, 105), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 
-	drawButton(hdc, RECT{20, 56, 82, 80}, "后台", accentColor, rgb(255, 255, 255))
-	drawButton(hdc, RECT{88, 56, 140, 80}, "退出", lighten(accentColor, 0.88), rgb(51, 65, 85))
+	drawButton(hdc, adminButtonRect(), "后台", accentColor, rgb(255, 255, 255))
+	drawButton(hdc, exitButtonRect(), "退出", lighten(accentColor, 0.88), rgb(51, 65, 85))
 
 	area := studentArea()
 	fillRound(hdc, area.Left, area.Top, area.Right, area.Bottom, 18, panelColor, lighten(accentColor, 0.66))
@@ -620,8 +657,8 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 	savedDC := saveDC(hdc)
 	intersectClipRect(hdc, contentArea)
 
-	chipW := int32(118)
-	gap := int32(10)
+	chipW := studentChipWidth()
+	gap := int32(12)
 	startX := contentArea.Left - scrollOffset
 	for i, student := range activeClass.Students {
 		left := startX + int32(i)*(chipW+gap)
@@ -629,8 +666,8 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 		if right < contentArea.Left || left > contentArea.Right {
 			continue
 		}
-		top := area.Top + 8
-		bottom := area.Bottom - 8
+		top := contentArea.Top + 4
+		bottom := contentArea.Bottom - 4
 		bg := studentColor
 		border := lighten(accentColor, 0.72)
 		scoreColor := textColor
@@ -644,8 +681,8 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 			scoreColor = darken(negativeColor, 0.22)
 		}
 		fillRound(hdc, left, top, right, bottom, 16, bg, border)
-		drawText(hdc, student.Name, RECT{left + 8, top + 7, right - 8, top + 29}, fontBold, textColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{left + 8, top + 31, right - 8, bottom - 5}, fontSmall, scoreColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, student.Name, RECT{left + 10, top + 8, right - 10, top + 38}, fontBold, textColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{left + 10, top + 42, right - 10, bottom - 8}, fontNormal, scoreColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	restoreDC(hdc, savedDC)
 	paintScorePanel(hdc)
@@ -662,12 +699,12 @@ func handleOverlayClick(hwnd HWND, x, y int32) {
 		}
 		closeScorePanel()
 	}
-	if inRect(x, y, RECT{20, 56, 82, 80}) {
+	if inRect(x, y, adminButtonRect()) {
 		logInfo("open admin requested")
 		showAdmin()
 		return
 	}
-	if inRect(x, y, RECT{88, 56, 140, 80}) {
+	if inRect(x, y, exitButtonRect()) {
 		if messageBox(hwnd, "确定退出课堂加减分程序吗？", "退出", MB_YESNO|MB_ICONQUESTION) == IDYES {
 			procDestroyWindow.Call(uintptr(hwnd))
 		}
@@ -1566,7 +1603,28 @@ func findClassIndexInData(data *AppData, id string) int {
 }
 
 func studentArea() RECT {
-	return RECT{156, 14, overlayWidth - 16, overlayHeight - 14}
+	return RECT{184, 16, overlayWidth - 18, overlayHeight - 16}
+}
+
+func leftPanelRect() RECT {
+	return RECT{10, 10, 170, overlayHeight - 10}
+}
+
+func adminButtonRect() RECT {
+	panel := leftPanelRect()
+	return RECT{panel.Left + 14, panel.Bottom - 42, panel.Left + 82, panel.Bottom - 12}
+}
+
+func exitButtonRect() RECT {
+	panel := leftPanelRect()
+	return RECT{panel.Left + 90, panel.Bottom - 42, panel.Right - 14, panel.Bottom - 12}
+}
+
+func studentChipWidth() int32 {
+	if overlayHeight >= 126 {
+		return 142
+	}
+	return 132
 }
 
 func hitStudent(x int32) int {
@@ -1575,9 +1633,9 @@ func hitStudent(x int32) int {
 		return -1
 	}
 	area := studentArea()
-	chipW := int32(118)
-	gap := int32(10)
-	relative := x - area.Left - 10 + scrollOffset
+	chipW := studentChipWidth()
+	gap := int32(12)
+	relative := x - (area.Left + 10) + scrollOffset
 	if relative < 0 {
 		return -1
 	}
@@ -1596,8 +1654,8 @@ func clampScroll() {
 		return
 	}
 	area := studentArea()
-	chipW := int32(118)
-	gap := int32(10)
+	chipW := studentChipWidth()
+	gap := int32(12)
 	content := int32(len(class.Students))*(chipW+gap) + 20
 	maxScroll := content - (area.Right - area.Left)
 	if maxScroll < 0 {
@@ -1709,6 +1767,10 @@ func appendMenu(menu HMENU, id int, text string) {
 	procAppendMenuW.Call(uintptr(menu), MF_STRING, uintptr(id), uintptr(unsafe.Pointer(utf16Ptr(text))))
 }
 
+func screenToClient(hwnd HWND, pt *POINT) {
+	procScreenToClient.Call(uintptr(hwnd), uintptr(unsafe.Pointer(pt)))
+}
+
 func messageBox(hwnd HWND, text string, title string, flags uintptr) uintptr {
 	ret, _, _ := procMessageBoxW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(utf16Ptr(text))), uintptr(unsafe.Pointer(utf16Ptr(title))), flags)
 	return ret
@@ -1757,6 +1819,44 @@ func invalidate(hwnd HWND) {
 func initialOverlayX() int32 {
 	screenW, _, _ := procGetSystemMetrics.Call(0)
 	return int32(math.Max(0, float64((int32(screenW)-overlayWidth)/2)))
+}
+
+func overlayHitTest(hwnd HWND, lParam uintptr) uintptr {
+	x, y := pointFromLParam(lParam)
+	pt := POINT{x, y}
+	screenToClient(hwnd, &pt)
+	w := overlayWidth
+	h := overlayHeight
+	grip := int32(10)
+	if w <= 0 || h <= 0 {
+		return HTCLIENT
+	}
+	left := pt.X < grip
+	right := pt.X >= w-grip
+	top := pt.Y < grip
+	bottom := pt.Y >= h-grip
+	switch {
+	case top && left:
+		return HTTOPLEFT
+	case top && right:
+		return HTTOPRIGHT
+	case bottom && left:
+		return HTBOTTOMLEFT
+	case bottom && right:
+		return HTBOTTOMRIGHT
+	case left:
+		return HTLEFT
+	case right:
+		return HTRIGHT
+	case top:
+		return HTTOP
+	case bottom:
+		return HTBOTTOM
+	}
+	if inRect(pt.X, pt.Y, studentArea()) {
+		return HTCLIENT
+	}
+	return HTCAPTION
 }
 
 func pointFromLParam(lParam uintptr) (int32, int32) {
