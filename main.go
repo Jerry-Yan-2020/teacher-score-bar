@@ -71,6 +71,18 @@ type PAINTSTRUCT struct {
 	RgbReserved [32]byte
 }
 
+type CHOOSECOLOR struct {
+	LStructSize    uint32
+	HwndOwner      HWND
+	HInstance      uintptr
+	RgbResult      uint32
+	LpCustColors   *uint32
+	Flags          uint32
+	LCustData      uintptr
+	LpfnHook       uintptr
+	LpTemplateName *uint16
+}
+
 type scoreAction struct {
 	ID    int
 	Label string
@@ -251,6 +263,12 @@ const (
 	ID_SETTINGS_OPACITY  = 2207
 	ID_SETTINGS_APPLY    = 2208
 	ID_SETTINGS_RESET    = 2209
+	ID_PICK_OVERLAY      = 2211
+	ID_PICK_PANEL        = 2212
+	ID_PICK_STUDENT      = 2213
+	ID_PICK_ACCENT       = 2214
+	ID_PICK_POSITIVE     = 2215
+	ID_PICK_NEGATIVE     = 2216
 
 	ID_SCORE_PLUS1  = 3001
 	ID_SCORE_PLUS2  = 3002
@@ -261,12 +279,16 @@ const (
 	ID_SCORE_ZERO   = 3007
 
 	ID_TIMER_HEARTBEAT = 4001
+
+	CC_RGBINIT  = 0x00000001
+	CC_FULLOPEN = 0x00000002
 )
 
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	comdlg32 = syscall.NewLazyDLL("comdlg32.dll")
 
 	procRegisterClassExW           = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW            = user32.NewProc("CreateWindowExW")
@@ -327,6 +349,7 @@ var (
 	procDrawTextW              = user32.NewProc("DrawTextW")
 	procCreateFontW            = gdi32.NewProc("CreateFontW")
 	procGetStockObject         = gdi32.NewProc("GetStockObject")
+	procChooseColorW           = comdlg32.NewProc("ChooseColorW")
 )
 
 var (
@@ -891,6 +914,18 @@ func adminWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr) {
 			populateSettingsEdits()
 			applyOverlayWindowStyle()
 			saveAndRefreshAll()
+		case ID_PICK_OVERLAY:
+			pickColorFor(ID_SETTINGS_OVERLAY)
+		case ID_PICK_PANEL:
+			pickColorFor(ID_SETTINGS_PANEL)
+		case ID_PICK_STUDENT:
+			pickColorFor(ID_SETTINGS_STUDENT)
+		case ID_PICK_ACCENT:
+			pickColorFor(ID_SETTINGS_ACCENT)
+		case ID_PICK_POSITIVE:
+			pickColorFor(ID_SETTINGS_POSITIVE)
+		case ID_PICK_NEGATIVE:
+			pickColorFor(ID_SETTINGS_NEGATIVE)
 		case ID_SAVE_CLOSE:
 			saveData()
 			procShowWindow.Call(uintptr(hwnd), SW_HIDE)
@@ -943,26 +978,26 @@ func createAdminControls(hwnd HWND) {
 	adminControls[ID_RECORD_LIST] = createControl("LISTBOX", "", WS_BORDER|WS_VSCROLL, 552, 378, 388, 104, hwnd, ID_RECORD_LIST)
 
 	createLabel(hwnd, "样式设置", 760, 42, 120, 22)
-	createLabel(hwnd, "悬浮窗", 760, 72, 64, 22)
-	adminControls[ID_SETTINGS_OVERLAY] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 70, 112, 26, hwnd, ID_SETTINGS_OVERLAY)
-	createLabel(hwnd, "学生区", 760, 104, 64, 22)
-	adminControls[ID_SETTINGS_PANEL] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 102, 112, 26, hwnd, ID_SETTINGS_PANEL)
-	createLabel(hwnd, "学生卡", 760, 136, 64, 22)
-	adminControls[ID_SETTINGS_STUDENT] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 134, 112, 26, hwnd, ID_SETTINGS_STUDENT)
-	createLabel(hwnd, "强调色", 760, 168, 64, 22)
-	adminControls[ID_SETTINGS_ACCENT] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 166, 112, 26, hwnd, ID_SETTINGS_ACCENT)
-	createLabel(hwnd, "加分色", 760, 200, 64, 22)
-	adminControls[ID_SETTINGS_POSITIVE] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 198, 112, 26, hwnd, ID_SETTINGS_POSITIVE)
-	createLabel(hwnd, "减分色", 760, 232, 64, 22)
-	adminControls[ID_SETTINGS_NEGATIVE] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 230, 112, 26, hwnd, ID_SETTINGS_NEGATIVE)
+	createColorSetting(hwnd, "悬浮窗", ID_SETTINGS_OVERLAY, ID_PICK_OVERLAY, 760, 70)
+	createColorSetting(hwnd, "学生区", ID_SETTINGS_PANEL, ID_PICK_PANEL, 760, 102)
+	createColorSetting(hwnd, "学生卡", ID_SETTINGS_STUDENT, ID_PICK_STUDENT, 760, 134)
+	createColorSetting(hwnd, "强调色", ID_SETTINGS_ACCENT, ID_PICK_ACCENT, 760, 166)
+	createColorSetting(hwnd, "加分色", ID_SETTINGS_POSITIVE, ID_PICK_POSITIVE, 760, 198)
+	createColorSetting(hwnd, "减分色", ID_SETTINGS_NEGATIVE, ID_PICK_NEGATIVE, 760, 230)
 	createLabel(hwnd, "透明度", 760, 264, 64, 22)
-	adminControls[ID_SETTINGS_OPACITY] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 828, 262, 112, 26, hwnd, ID_SETTINGS_OPACITY)
-	createControl("BUTTON", "应用样式", WS_TABSTOP, 760, 306, 86, 30, hwnd, ID_SETTINGS_APPLY)
-	createControl("BUTTON", "恢复默认", WS_TABSTOP, 854, 306, 86, 30, hwnd, ID_SETTINGS_RESET)
+	adminControls[ID_SETTINGS_OPACITY] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, 824, 262, 62, 26, hwnd, ID_SETTINGS_OPACITY)
+	createControl("BUTTON", "应用", WS_TABSTOP, 760, 306, 82, 30, hwnd, ID_SETTINGS_APPLY)
+	createControl("BUTTON", "默认", WS_TABSTOP, 858, 306, 82, 30, hwnd, ID_SETTINGS_RESET)
 
-	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 760, 500, 180, 32, hwnd, ID_SAVE_CLOSE)
-	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 540, 180, 32, hwnd, ID_EXIT_APP)
+	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 760, 382, 180, 32, hwnd, ID_SAVE_CLOSE)
+	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 424, 180, 32, hwnd, ID_EXIT_APP)
 	populateSettingsEdits()
+}
+
+func createColorSetting(parent HWND, label string, editID int, pickID int, x, y int32) {
+	createLabel(parent, label, x, y+2, 64, 22)
+	adminControls[editID] = createControl("EDIT", "", WS_BORDER|ES_AUTOHSCROLL, x+64, y, 76, 26, parent, editID)
+	createControl("BUTTON", "选择", WS_TABSTOP, x+146, y, 46, 26, parent, pickID)
 }
 
 func createLabel(parent HWND, text string, x, y, w, h int32) HWND {
@@ -1298,6 +1333,22 @@ func applySettingsFromAdmin() {
 	populateSettingsEdits()
 	applyOverlayWindowStyle()
 	saveAndRefreshAll()
+}
+
+func pickColorFor(editID int) {
+	if adminControls == nil {
+		return
+	}
+	edit := adminControls[editID]
+	if edit == 0 {
+		return
+	}
+	current := colorFromHex(getEditText(edit), colorFromHex("#4F46E5", rgb(79, 70, 229)))
+	color, ok := chooseColor(adminHwnd, current)
+	if !ok {
+		return
+	}
+	setEditText(edit, hexFromColor(color))
 }
 
 func parseScoreEdit() (int, bool) {
@@ -1757,6 +1808,11 @@ func colorFromHex(value string, fallback uint32) uint32 {
 	return rgb(r, g, b)
 }
 
+func hexFromColor(color uint32) string {
+	r, g, b := splitRGB(color)
+	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
+}
+
 func isHexColor(value string) bool {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "#") || len(value) != 7 {
@@ -1818,6 +1874,22 @@ func applyOverlayWindowStyle() {
 		procSetWindowRgn.Call(uintptr(mainHwnd), rgn, 1)
 	}
 	invalidate(mainHwnd)
+}
+
+func chooseColor(owner HWND, initial uint32) (uint32, bool) {
+	customColors := [16]uint32{}
+	cc := CHOOSECOLOR{
+		LStructSize:  uint32(unsafe.Sizeof(CHOOSECOLOR{})),
+		HwndOwner:    owner,
+		RgbResult:    initial,
+		LpCustColors: &customColors[0],
+		Flags:        CC_RGBINIT | CC_FULLOPEN,
+	}
+	ret, _, _ := procChooseColorW.Call(uintptr(unsafe.Pointer(&cc)))
+	if ret == 0 {
+		return initial, false
+	}
+	return cc.RgbResult, true
 }
 
 func utf16Ptr(s string) *uint16 {
