@@ -333,6 +333,8 @@ var (
 	procBeginPaint                 = user32.NewProc("BeginPaint")
 	procEndPaint                   = user32.NewProc("EndPaint")
 	procGetClientRect              = user32.NewProc("GetClientRect")
+	procGetWindowRect              = user32.NewProc("GetWindowRect")
+	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
 	procSendMessageW               = user32.NewProc("SendMessageW")
 	procSetWindowTextW             = user32.NewProc("SetWindowTextW")
@@ -390,14 +392,18 @@ var (
 	overlayFontBold   HFONT
 	overlayFontTitle  HFONT
 
-	overlayWidth      int32 = 1280
-	overlayHeight     int32 = 122
+	overlayWidth      int32 = 1400
+	overlayHeight     int32 = 144
 	scrollOffset      int32
 	downX             int32
 	downY             int32
 	lastX             int32
 	isDown            bool
 	isDragging        bool
+	isScrolling       bool
+	isWindowDragging  bool
+	dragStartCursor   POINT
+	dragStartWindow   RECT
 	activeMenuStudent int = -1
 	scorePanelOpen    bool
 	scorePanelStudent int = -1
@@ -435,7 +441,7 @@ func main() {
 		WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED,
 		"TeacherScoreOverlayWindow",
 		"课堂加减分",
-		WS_POPUP|WS_THICKFRAME,
+		WS_POPUP,
 		initialOverlayX(), 18, overlayWidth, overlayHeight,
 		0, 0,
 	)
@@ -505,7 +511,8 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 		return overlayHitTest(hwnd, lParam)
 	case WM_GETMINMAXINFO:
 		info := (*MINMAXINFO)(unsafe.Pointer(lParam))
-		info.PtMinTrackSize = POINT{X: 920, Y: 104}
+		info.PtMinTrackSize = POINT{X: overlayWidth, Y: overlayHeight}
+		info.PtMaxTrackSize = POINT{X: overlayWidth, Y: overlayHeight}
 		return 0
 	case WM_SIZE:
 		width := int32(loword(lParam))
@@ -528,16 +535,31 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 		downX, downY, lastX = x, y, x
 		isDown = true
 		isDragging = false
+		isWindowDragging = shouldDragOverlayWindow(x, y)
+		isScrolling = !isWindowDragging && inRect(x, y, studentArea())
+		if isWindowDragging {
+			procGetCursorPos.Call(uintptr(unsafe.Pointer(&dragStartCursor)))
+			procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&dragStartWindow)))
+		}
 		procSetCapture.Call(uintptr(hwnd))
 		return 0
 	case WM_MOUSEMOVE:
 		if isDown {
+			if isWindowDragging {
+				var pt POINT
+				procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+				newX := dragStartWindow.Left + pt.X - dragStartCursor.X
+				newY := dragStartWindow.Top + pt.Y - dragStartCursor.Y
+				procSetWindowPos.Call(uintptr(hwnd), HWND_TOPMOST, uintptr(newX), uintptr(newY), 0, 0, SWP_NOSIZE|SWP_NOACTIVATE)
+				isDragging = true
+				return 0
+			}
 			x, _ := pointFromLParam(lParam)
 			delta := x - lastX
-			if abs32(x-downX) > 4 {
+			if isScrolling && abs32(x-downX) > 4 {
 				isDragging = true
 			}
-			if isDragging {
+			if isScrolling && isDragging {
 				scrollOffset -= delta
 				clampScroll()
 				invalidate(mainHwnd)
@@ -550,6 +572,8 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 		wasDragging := isDragging
 		isDown = false
 		isDragging = false
+		isScrolling = false
+		isWindowDragging = false
 		procReleaseCapture.Call()
 		if !wasDragging {
 			handleOverlayClick(hwnd, x, y)
@@ -558,6 +582,8 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 	case WM_CAPTURECHANGED:
 		isDown = false
 		isDragging = false
+		isScrolling = false
+		isWindowDragging = false
 		return 0
 	case WM_MOUSEWHEEL:
 		delta := int16((wParam >> 16) & 0xffff)
@@ -717,8 +743,6 @@ func handleOverlayClick(hwnd HWND, x, y int32) {
 	}
 	area := studentArea()
 	if !inRect(x, y, area) {
-		procReleaseCapture.Call()
-		procSendMessageW.Call(uintptr(hwnd), WM_NCLBUTTONDOWN, HTCAPTION, 0)
 		return
 	}
 	studentIndex := hitStudent(x)
@@ -726,6 +750,16 @@ func handleOverlayClick(hwnd HWND, x, y int32) {
 		logInfo("student clicked index=%d", studentIndex)
 		openScorePanel(studentIndex, x)
 	}
+}
+
+func shouldDragOverlayWindow(x, y int32) bool {
+	if inRect(x, y, adminButtonRect()) || inRect(x, y, exitButtonRect()) {
+		return false
+	}
+	if scorePanelOpen && inRect(x, y, scorePanelRect) {
+		return false
+	}
+	return !inRect(x, y, studentArea())
 }
 
 func openScorePanel(studentIndex int, anchorX int32) {
@@ -1866,44 +1900,7 @@ func initialOverlayX() int32 {
 }
 
 func overlayHitTest(hwnd HWND, lParam uintptr) uintptr {
-	x, y := pointFromLParam(lParam)
-	pt := POINT{x, y}
-	screenToClient(hwnd, &pt)
-	w := overlayWidth
-	h := overlayHeight
-	grip := overlayUnit(10)
-	if w <= 0 || h <= 0 {
-		return HTCLIENT
-	}
-	left := pt.X < grip
-	right := pt.X >= w-grip
-	top := pt.Y < grip
-	bottom := pt.Y >= h-grip
-	switch {
-	case top && left:
-		return HTTOPLEFT
-	case top && right:
-		return HTTOPRIGHT
-	case bottom && left:
-		return HTBOTTOMLEFT
-	case bottom && right:
-		return HTBOTTOMRIGHT
-	case left:
-		return HTLEFT
-	case right:
-		return HTRIGHT
-	case top:
-		return HTTOP
-	case bottom:
-		return HTBOTTOM
-	}
-	if inRect(pt.X, pt.Y, adminButtonRect()) || inRect(pt.X, pt.Y, exitButtonRect()) {
-		return HTCLIENT
-	}
-	if inRect(pt.X, pt.Y, studentArea()) {
-		return HTCLIENT
-	}
-	return HTCAPTION
+	return HTCLIENT
 }
 
 func pointFromLParam(lParam uintptr) (int32, int32) {
