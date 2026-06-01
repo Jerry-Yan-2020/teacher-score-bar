@@ -194,6 +194,7 @@ const (
 
 	PS_SOLID = 0
 	NULL_PEN = 8
+	SRCCOPY  = 0x00CC0020
 
 	LBS_NOTIFY     = 0x0001
 	ES_AUTOHSCROLL = 0x0080
@@ -307,18 +308,25 @@ var (
 	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
 	procSetProcessDPIAware         = user32.NewProc("SetProcessDPIAware")
 
-	procCreateSolidBrush   = gdi32.NewProc("CreateSolidBrush")
-	procCreatePen          = gdi32.NewProc("CreatePen")
-	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
-	procDeleteObject       = gdi32.NewProc("DeleteObject")
-	procSelectObject       = gdi32.NewProc("SelectObject")
-	procRoundRect          = gdi32.NewProc("RoundRect")
-	procRectangle          = gdi32.NewProc("Rectangle")
-	procSetBkMode          = gdi32.NewProc("SetBkMode")
-	procSetTextColor       = gdi32.NewProc("SetTextColor")
-	procDrawTextW          = user32.NewProc("DrawTextW")
-	procCreateFontW        = gdi32.NewProc("CreateFontW")
-	procGetStockObject     = gdi32.NewProc("GetStockObject")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procIntersectClipRect      = gdi32.NewProc("IntersectClipRect")
+	procSaveDC                 = gdi32.NewProc("SaveDC")
+	procRestoreDC              = gdi32.NewProc("RestoreDC")
+	procCreatePen              = gdi32.NewProc("CreatePen")
+	procCreateRoundRectRgn     = gdi32.NewProc("CreateRoundRectRgn")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procRoundRect              = gdi32.NewProc("RoundRect")
+	procRectangle              = gdi32.NewProc("Rectangle")
+	procSetBkMode              = gdi32.NewProc("SetBkMode")
+	procSetTextColor           = gdi32.NewProc("SetTextColor")
+	procDrawTextW              = user32.NewProc("DrawTextW")
+	procCreateFontW            = gdi32.NewProc("CreateFontW")
+	procGetStockObject         = gdi32.NewProc("GetStockObject")
 )
 
 var (
@@ -524,12 +532,36 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 func paintOverlay(hwnd HWND) {
 	var ps PAINTSTRUCT
 	hdcRet, _, _ := procBeginPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
-	hdc := HDC(hdcRet)
+	windowDC := HDC(hdcRet)
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
 	var rc RECT
 	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc)))
+	width := rc.Right - rc.Left
+	height := rc.Bottom - rc.Top
+	if width <= 0 || height <= 0 {
+		return
+	}
 
+	bufferDC, _, _ := procCreateCompatibleDC.Call(uintptr(windowDC))
+	if bufferDC == 0 {
+		paintOverlayContent(windowDC, rc)
+		return
+	}
+	defer procDeleteDC.Call(bufferDC)
+	bufferBitmap, _, _ := procCreateCompatibleBitmap.Call(uintptr(windowDC), uintptr(width), uintptr(height))
+	if bufferBitmap == 0 {
+		paintOverlayContent(windowDC, rc)
+		return
+	}
+	defer deleteObject(HGDIOBJ(bufferBitmap))
+	oldBitmap := selectObject(HDC(bufferDC), HGDIOBJ(bufferBitmap))
+	defer selectObject(HDC(bufferDC), oldBitmap)
+	paintOverlayContent(HDC(bufferDC), rc)
+	procBitBlt.Call(uintptr(windowDC), 0, 0, uintptr(width), uintptr(height), bufferDC, 0, 0, SRCCOPY)
+}
+
+func paintOverlayContent(hdc HDC, rc RECT) {
 	settings := normalizedSettings()
 	overlayColor := colorFromHex(settings.OverlayColor, rgb(248, 250, 252))
 	panelColor := colorFromHex(settings.PanelColor, rgb(238, 242, 255))
@@ -561,13 +593,17 @@ func paintOverlay(hwnd HWND) {
 		return
 	}
 
+	contentArea := RECT{area.Left + 10, area.Top + 7, area.Right - 10, area.Bottom - 7}
+	savedDC := saveDC(hdc)
+	intersectClipRect(hdc, contentArea)
+
 	chipW := int32(118)
 	gap := int32(10)
-	startX := area.Left + 10 - scrollOffset
+	startX := contentArea.Left - scrollOffset
 	for i, student := range activeClass.Students {
 		left := startX + int32(i)*(chipW+gap)
 		right := left + chipW
-		if right < area.Left || left > area.Right {
+		if right < contentArea.Left || left > contentArea.Right {
 			continue
 		}
 		top := area.Top + 8
@@ -588,6 +624,7 @@ func paintOverlay(hwnd HWND) {
 		drawText(hdc, student.Name, RECT{left + 8, top + 7, right - 8, top + 29}, fontBold, textColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 		drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{left + 8, top + 31, right - 8, bottom - 5}, fontSmall, scoreColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
+	restoreDC(hdc, savedDC)
 	paintScorePanel(hdc)
 }
 
@@ -923,8 +960,8 @@ func createAdminControls(hwnd HWND) {
 	createControl("BUTTON", "应用样式", WS_TABSTOP, 760, 306, 86, 30, hwnd, ID_SETTINGS_APPLY)
 	createControl("BUTTON", "恢复默认", WS_TABSTOP, 854, 306, 86, 30, hwnd, ID_SETTINGS_RESET)
 
-	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 760, 404, 180, 32, hwnd, ID_SAVE_CLOSE)
-	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 450, 180, 32, hwnd, ID_EXIT_APP)
+	createControl("BUTTON", "保存并关闭后台", WS_TABSTOP, 760, 500, 180, 32, hwnd, ID_SAVE_CLOSE)
+	createControl("BUTTON", "退出程序", WS_TABSTOP, 760, 540, 180, 32, hwnd, ID_EXIT_APP)
 	populateSettingsEdits()
 }
 
@@ -1584,6 +1621,21 @@ func deleteObject(obj HGDIOBJ) {
 func selectObject(hdc HDC, obj HGDIOBJ) HGDIOBJ {
 	old, _, _ := procSelectObject.Call(uintptr(hdc), uintptr(obj))
 	return HGDIOBJ(old)
+}
+
+func saveDC(hdc HDC) int32 {
+	ret, _, _ := procSaveDC.Call(uintptr(hdc))
+	return int32(ret)
+}
+
+func restoreDC(hdc HDC, saved int32) {
+	if saved != 0 {
+		procRestoreDC.Call(uintptr(hdc), uintptr(saved))
+	}
+}
+
+func intersectClipRect(hdc HDC, rc RECT) {
+	procIntersectClipRect.Call(uintptr(hdc), uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom))
 }
 
 func sendMessage(hwnd HWND, msg uint32, wParam uintptr, lParam uintptr) uintptr {
