@@ -373,18 +373,22 @@ var (
 )
 
 var (
-	hInstance       HINSTANCE
-	mainHwnd        HWND
-	adminHwnd       HWND
-	overlayCallback uintptr
-	adminCallback   uintptr
-	appData         AppData
-	dataPath        string
-	logPath         string
-	fontNormal      HFONT
-	fontSmall       HFONT
-	fontBold        HFONT
-	fontTitle       HFONT
+	hInstance         HINSTANCE
+	mainHwnd          HWND
+	adminHwnd         HWND
+	overlayCallback   uintptr
+	adminCallback     uintptr
+	appData           AppData
+	dataPath          string
+	logPath           string
+	fontNormal        HFONT
+	fontSmall         HFONT
+	fontBold          HFONT
+	fontTitle         HFONT
+	overlayFontNormal HFONT
+	overlayFontSmall  HFONT
+	overlayFontBold   HFONT
+	overlayFontTitle  HFONT
 
 	overlayWidth      int32 = 1280
 	overlayHeight     int32 = 122
@@ -509,6 +513,7 @@ func overlayWndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) (ret uintptr)
 		if width > 0 && height > 0 {
 			overlayWidth = width
 			overlayHeight = height
+			updateOverlayFonts()
 			clampScroll()
 			applyOverlayWindowStyle()
 		}
@@ -632,8 +637,8 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 
 	fillRound(hdc, rc.Left, rc.Top, rc.Right, rc.Bottom, 24, overlayColor, lighten(accentColor, 0.62))
 	leftPanel := leftPanelRect()
-	fillRound(hdc, leftPanel.Left, leftPanel.Top, leftPanel.Right, leftPanel.Bottom, 18, lighten(accentColor, 0.83), lighten(accentColor, 0.58))
-	drawText(hdc, "课堂加减分", RECT{leftPanel.Left + 14, leftPanel.Top + 8, leftPanel.Right - 10, leftPanel.Top + 32}, fontTitle, textColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	fillRound(hdc, leftPanel.Left, leftPanel.Top, leftPanel.Right, leftPanel.Bottom, overlayUnit(18), lighten(accentColor, 0.83), lighten(accentColor, 0.58))
+	drawText(hdc, "课堂加减分", RECT{leftPanel.Left + overlayUnit(14), leftPanel.Top + overlayUnit(8), leftPanel.Right - overlayUnit(10), leftPanel.Top + overlayUnit(32)}, overlayFontTitle, textColor, DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	activeClass := getActiveClass()
 	className := "未配置班级"
 	studentCount := 0
@@ -641,24 +646,24 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 		className = activeClass.Name
 		studentCount = len(activeClass.Students)
 	}
-	drawText(hdc, fmt.Sprintf("%s · %d人", className, studentCount), RECT{leftPanel.Left + 14, leftPanel.Top + 34, leftPanel.Right - 10, leftPanel.Top + 56}, fontNormal, rgb(71, 85, 105), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, fmt.Sprintf("%s · %d人", className, studentCount), RECT{leftPanel.Left + overlayUnit(14), leftPanel.Top + overlayUnit(34), leftPanel.Right - overlayUnit(10), leftPanel.Top + overlayUnit(56)}, overlayFontNormal, rgb(71, 85, 105), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 
 	drawButton(hdc, adminButtonRect(), "后台", accentColor, rgb(255, 255, 255))
 	drawButton(hdc, exitButtonRect(), "退出", lighten(accentColor, 0.88), rgb(51, 65, 85))
 
 	area := studentArea()
-	fillRound(hdc, area.Left, area.Top, area.Right, area.Bottom, 18, panelColor, lighten(accentColor, 0.66))
+	fillRound(hdc, area.Left, area.Top, area.Right, area.Bottom, overlayUnit(18), panelColor, lighten(accentColor, 0.66))
 	if activeClass == nil || len(activeClass.Students) == 0 {
-		drawText(hdc, "点击“后台”添加班级和学生", area, fontNormal, rgb(107, 114, 128), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		drawText(hdc, "点击“后台”添加班级和学生", area, overlayFontNormal, rgb(107, 114, 128), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 		return
 	}
 
-	contentArea := RECT{area.Left + 10, area.Top + 7, area.Right - 10, area.Bottom - 7}
+	contentArea := RECT{area.Left + overlayUnit(10), area.Top + overlayUnit(7), area.Right - overlayUnit(10), area.Bottom - overlayUnit(7)}
 	savedDC := saveDC(hdc)
 	intersectClipRect(hdc, contentArea)
 
 	chipW := studentChipWidth()
-	gap := int32(12)
+	gap := overlayUnit(12)
 	startX := contentArea.Left - scrollOffset
 	for i, student := range activeClass.Students {
 		left := startX + int32(i)*(chipW+gap)
@@ -666,8 +671,8 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 		if right < contentArea.Left || left > contentArea.Right {
 			continue
 		}
-		top := contentArea.Top + 4
-		bottom := contentArea.Bottom - 4
+		top := contentArea.Top + overlayUnit(4)
+		bottom := contentArea.Bottom - overlayUnit(4)
 		bg := studentColor
 		border := lighten(accentColor, 0.72)
 		scoreColor := textColor
@@ -680,9 +685,9 @@ func paintOverlayContent(hdc HDC, rc RECT) {
 			border = lighten(negativeColor, 0.32)
 			scoreColor = darken(negativeColor, 0.22)
 		}
-		fillRound(hdc, left, top, right, bottom, 16, bg, border)
-		drawText(hdc, student.Name, RECT{left + 10, top + 8, right - 10, top + 38}, fontBold, textColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{left + 10, top + 42, right - 10, bottom - 8}, fontNormal, scoreColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+		fillRound(hdc, left, top, right, bottom, overlayUnit(16), bg, border)
+		drawText(hdc, student.Name, RECT{left + overlayUnit(10), top + overlayUnit(8), right - overlayUnit(10), top + overlayUnit(38)}, overlayFontBold, textColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{left + overlayUnit(10), top + overlayUnit(42), right - overlayUnit(10), bottom - overlayUnit(8)}, overlayFontNormal, scoreColor, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	}
 	restoreDC(hdc, savedDC)
 	paintScorePanel(hdc)
@@ -748,19 +753,19 @@ func closeScorePanel() {
 
 func layoutScorePanel(anchorX int32) {
 	area := studentArea()
-	panelW := int32(476)
-	panelH := int32(58)
+	panelW := overlayUnit(476)
+	panelH := overlayUnit(58)
 	left := anchorX - panelW/2
-	if left < area.Left+8 {
-		left = area.Left + 8
+	if left < area.Left+overlayUnit(8) {
+		left = area.Left + overlayUnit(8)
 	}
-	if left+panelW > area.Right-8 {
-		left = area.Right - 8 - panelW
+	if left+panelW > area.Right-overlayUnit(8) {
+		left = area.Right - overlayUnit(8) - panelW
 	}
-	if left < area.Left+8 {
-		left = area.Left + 8
+	if left < area.Left+overlayUnit(8) {
+		left = area.Left + overlayUnit(8)
 	}
-	top := area.Top + 10
+	top := area.Top + overlayUnit(10)
 	scorePanelRect = RECT{left, top, left + panelW, top + panelH}
 	labels := []scoreAction{
 		{ID: ID_SCORE_PLUS1, Label: "+1", Delta: 1},
@@ -772,12 +777,12 @@ func layoutScorePanel(anchorX int32) {
 		{ID: ID_SCORE_ZERO, Label: "清零", Zero: true},
 	}
 	scoreActions = labels
-	btnW := int32(48)
-	gap := int32(6)
-	start := scorePanelRect.Right - 12 - int32(len(scoreActions))*btnW - int32(len(scoreActions)-1)*gap
+	btnW := overlayUnit(48)
+	gap := overlayUnit(6)
+	start := scorePanelRect.Right - overlayUnit(12) - int32(len(scoreActions))*btnW - int32(len(scoreActions)-1)*gap
 	for i := range scoreActions {
 		left := start + int32(i)*(btnW+gap)
-		scoreActions[i].Rect = RECT{left, scorePanelRect.Top + 16, left + btnW, scorePanelRect.Bottom - 12}
+		scoreActions[i].Rect = RECT{left, scorePanelRect.Top + overlayUnit(16), left + btnW, scorePanelRect.Bottom - overlayUnit(12)}
 	}
 }
 
@@ -795,9 +800,9 @@ func paintScorePanel(hdc HDC) {
 	positiveColor := colorFromHex(settings.PositiveColor, rgb(16, 185, 129))
 	negativeColor := colorFromHex(settings.NegativeColor, rgb(244, 63, 94))
 	student := class.Students[scorePanelStudent]
-	fillRound(hdc, scorePanelRect.Left, scorePanelRect.Top, scorePanelRect.Right, scorePanelRect.Bottom, 18, darken(accentColor, 0.48), lighten(accentColor, 0.24))
-	drawText(hdc, student.Name, RECT{scorePanelRect.Left + 14, scorePanelRect.Top + 8, scorePanelRect.Left + 128, scorePanelRect.Top + 30}, fontBold, rgb(255, 255, 255), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
-	drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{scorePanelRect.Left + 14, scorePanelRect.Top + 30, scorePanelRect.Left + 128, scorePanelRect.Bottom - 6}, fontSmall, rgb(203, 213, 225), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	fillRound(hdc, scorePanelRect.Left, scorePanelRect.Top, scorePanelRect.Right, scorePanelRect.Bottom, overlayUnit(18), darken(accentColor, 0.48), lighten(accentColor, 0.24))
+	drawText(hdc, student.Name, RECT{scorePanelRect.Left + overlayUnit(14), scorePanelRect.Top + overlayUnit(8), scorePanelRect.Left + overlayUnit(128), scorePanelRect.Top + overlayUnit(30)}, overlayFontBold, rgb(255, 255, 255), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
+	drawText(hdc, fmt.Sprintf("%+d 分", student.Score), RECT{scorePanelRect.Left + overlayUnit(14), scorePanelRect.Top + overlayUnit(30), scorePanelRect.Left + overlayUnit(128), scorePanelRect.Bottom - overlayUnit(6)}, overlayFontSmall, rgb(203, 213, 225), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	for _, action := range scoreActions {
 		bg := positiveColor
 		fg := rgb(255, 255, 255)
@@ -1603,28 +1608,39 @@ func findClassIndexInData(data *AppData, id string) int {
 }
 
 func studentArea() RECT {
-	return RECT{184, 16, overlayWidth - 18, overlayHeight - 16}
+	panel := leftPanelRect()
+	margin := overlayUnit(16)
+	return RECT{panel.Right + overlayUnit(14), margin, overlayWidth - overlayUnit(18), overlayHeight - margin}
 }
 
 func leftPanelRect() RECT {
-	return RECT{10, 10, 170, overlayHeight - 10}
+	margin := overlayUnit(10)
+	return RECT{margin, margin, margin + overlayUnit(160), overlayHeight - margin}
 }
 
 func adminButtonRect() RECT {
 	panel := leftPanelRect()
-	return RECT{panel.Left + 14, panel.Bottom - 42, panel.Left + 82, panel.Bottom - 12}
+	inset := overlayUnit(14)
+	gap := overlayUnit(8)
+	height := overlayUnit(30)
+	width := (panel.Right - panel.Left - inset*2 - gap) / 2
+	top := panel.Bottom - overlayUnit(12) - height
+	return RECT{panel.Left + inset, top, panel.Left + inset + width, top + height}
 }
 
 func exitButtonRect() RECT {
 	panel := leftPanelRect()
-	return RECT{panel.Left + 90, panel.Bottom - 42, panel.Right - 14, panel.Bottom - 12}
+	inset := overlayUnit(14)
+	gap := overlayUnit(8)
+	height := overlayUnit(30)
+	width := (panel.Right - panel.Left - inset*2 - gap) / 2
+	top := panel.Bottom - overlayUnit(12) - height
+	left := panel.Left + inset + width + gap
+	return RECT{left, top, left + width, top + height}
 }
 
 func studentChipWidth() int32 {
-	if overlayHeight >= 126 {
-		return 142
-	}
-	return 132
+	return overlayUnit(142)
 }
 
 func hitStudent(x int32) int {
@@ -1634,8 +1650,8 @@ func hitStudent(x int32) int {
 	}
 	area := studentArea()
 	chipW := studentChipWidth()
-	gap := int32(12)
-	relative := x - (area.Left + 10) + scrollOffset
+	gap := overlayUnit(12)
+	relative := x - (area.Left + overlayUnit(10)) + scrollOffset
 	if relative < 0 {
 		return -1
 	}
@@ -1655,8 +1671,8 @@ func clampScroll() {
 	}
 	area := studentArea()
 	chipW := studentChipWidth()
-	gap := int32(12)
-	content := int32(len(class.Students))*(chipW+gap) + 20
+	gap := overlayUnit(12)
+	content := int32(len(class.Students))*(chipW+gap) + overlayUnit(20)
 	maxScroll := content - (area.Right - area.Left)
 	if maxScroll < 0 {
 		maxScroll = 0
@@ -1670,8 +1686,8 @@ func clampScroll() {
 }
 
 func drawButton(hdc HDC, rc RECT, text string, bg uint32, fg uint32) {
-	fillRound(hdc, rc.Left, rc.Top, rc.Right, rc.Bottom, 9, bg, rgb(203, 213, 225))
-	drawText(hdc, text, rc, fontNormal, fg, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	fillRound(hdc, rc.Left, rc.Top, rc.Right, rc.Bottom, overlayUnit(9), bg, rgb(203, 213, 225))
+	drawText(hdc, text, rc, overlayFontNormal, fg, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 }
 
 func fillRound(hdc HDC, left, top, right, bottom, radius int32, fill, border uint32) {
@@ -1699,6 +1715,34 @@ func createFonts() {
 	fontSmall = createFont(13, FW_NORMAL)
 	fontBold = createFont(16, FW_SEMIBOLD)
 	fontTitle = createFont(18, FW_BOLD)
+	updateOverlayFonts()
+}
+
+func updateOverlayFonts() {
+	deleteObject(HGDIOBJ(overlayFontNormal))
+	deleteObject(HGDIOBJ(overlayFontSmall))
+	deleteObject(HGDIOBJ(overlayFontBold))
+	deleteObject(HGDIOBJ(overlayFontTitle))
+	overlayFontNormal = createFont(scaledFontSize(16), FW_NORMAL)
+	overlayFontSmall = createFont(scaledFontSize(13), FW_NORMAL)
+	overlayFontBold = createFont(scaledFontSize(16), FW_SEMIBOLD)
+	overlayFontTitle = createFont(scaledFontSize(18), FW_BOLD)
+}
+
+func scaledFontSize(base int32) int32 {
+	return int32(math.Round(float64(base) * overlayScale()))
+}
+
+func overlayUnit(base int32) int32 {
+	value := int32(math.Round(float64(base) * overlayScale()))
+	if value < 1 {
+		return 1
+	}
+	return value
+}
+
+func overlayScale() float64 {
+	return clampFloat(float64(overlayHeight)/122.0, 0.85, 1.6)
 }
 
 func createFont(size int32, weight int32) HFONT {
@@ -1827,7 +1871,7 @@ func overlayHitTest(hwnd HWND, lParam uintptr) uintptr {
 	screenToClient(hwnd, &pt)
 	w := overlayWidth
 	h := overlayHeight
-	grip := int32(10)
+	grip := overlayUnit(10)
 	if w <= 0 || h <= 0 {
 		return HTCLIENT
 	}
@@ -1852,6 +1896,9 @@ func overlayHitTest(hwnd HWND, lParam uintptr) uintptr {
 		return HTTOP
 	case bottom:
 		return HTBOTTOM
+	}
+	if inRect(pt.X, pt.Y, adminButtonRect()) || inRect(pt.X, pt.Y, exitButtonRect()) {
+		return HTCLIENT
 	}
 	if inRect(pt.X, pt.Y, studentArea()) {
 		return HTCLIENT
@@ -1953,6 +2000,16 @@ func darken(color uint32, amount float64) uint32 {
 }
 
 func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampFloat(value, min, max float64) float64 {
 	if value < min {
 		return min
 	}
